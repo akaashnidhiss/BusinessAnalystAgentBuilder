@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getJson } from "../api";
+import { DEFAULT_USER_ID, getJson } from "../api";
 
 type DatasetSummary = {
   dataset_id: string;
-  filename?: string | null;
-  has_config: boolean;
-  has_taxonomy: boolean;
+  display_name: string;
+  dims: string[];
+  metrics: string[];
+  stats: Record<string, unknown>;
+  taxonomy_yaml: string;
+  is_current: boolean;
 };
 
 const AgentUniversePage: React.FC = () => {
@@ -20,7 +23,7 @@ const AgentUniversePage: React.FC = () => {
       setLoading(true);
       setError(null);
       try {
-        const data = await getJson<DatasetSummary[]>("/api/datasets");
+        const data = await getJson<DatasetSummary[]>(`/api/users/${DEFAULT_USER_ID}/datasets`);
         setDatasets(data);
       } catch (err: any) {
         setError(err?.message || "Failed to load agents");
@@ -125,18 +128,22 @@ const AgentUniversePage: React.FC = () => {
                   <h4 className="text-sm font-semibold text-slate-50">
                     Agent for{" "}
                     <span className="font-mono text-[12px] text-slate-300">
-                      {ds.filename || "unnamed.csv"}
+                      {ds.display_name || ds.dataset_id}
                     </span>
                   </h4>
                   <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400">
-                    {ds.has_taxonomy ? "Ready" : ds.has_config ? "Configured" : "Uploaded"}
+                    {ds.taxonomy_yaml?.trim()
+                      ? "Ready"
+                      : (ds.dims || []).length
+                      ? "Configured"
+                      : "Uploaded"}
                   </span>
                 </div>
                 <p className="text-xs text-slate-400">
-                  {ds.has_taxonomy
+                  {ds.taxonomy_yaml?.trim()
                     ? "Taxonomy and validation are in place. You can query this agent."
-                    : ds.has_config
-                    ? "Config set — run ETL to generate the taxonomy."
+                    : (ds.dims || []).length
+                    ? "Config set — taxonomy was generated during dataset creation."
                     : "CSV uploaded — choose filter dimensions and metrics next."}
                 </p>
               </div>
@@ -148,18 +155,23 @@ const AgentUniversePage: React.FC = () => {
                   </span>
                   <span
                     className={`rounded-full px-2 py-0.5 ${
-                      ds.has_config ? "bg-emerald-900/70 text-emerald-200" : "bg-slate-900 text-slate-500"
+                      (ds.dims || []).length ? "bg-emerald-900/70 text-emerald-200" : "bg-slate-900 text-slate-500"
                     }`}
                   >
                     config
                   </span>
                   <span
                     className={`rounded-full px-2 py-0.5 ${
-                      ds.has_taxonomy ? "bg-sky-900/70 text-sky-200" : "bg-slate-900 text-slate-500"
+                      ds.taxonomy_yaml?.trim() ? "bg-sky-900/70 text-sky-200" : "bg-slate-900 text-slate-500"
                     }`}
                   >
                     taxonomy
                   </span>
+                  {ds.is_current && (
+                    <span className="rounded-full bg-slate-900 px-2 py-0.5 text-slate-300">
+                      current
+                    </span>
+                  )}
                 </div>
                 <div className="flex gap-2">
                   <Link
@@ -203,4 +215,3 @@ const AgentUniversePage: React.FC = () => {
 };
 
 export default AgentUniversePage;
-

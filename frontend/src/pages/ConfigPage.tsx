@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from "react";
-import { apiUrl } from "../api";
+import { DEFAULT_USER_ID, apiUrl } from "../api";
 
 type Props = {
   datasetId?: string;
   onDatasetId?: (id: string) => void;
+  uploadId?: string | null;
 };
 
-const ConfigPage: React.FC<Props> = ({ datasetId: initialId = "", onDatasetId }) => {
+const ConfigPage: React.FC<Props> = ({ datasetId: initialId = "", onDatasetId, uploadId }) => {
   const [datasetId, setDatasetId] = useState(initialId);
   const [filterable, setFilterable] = useState("");
   const [retrievable, setRetrievable] = useState("");
@@ -20,28 +21,37 @@ const ConfigPage: React.FC<Props> = ({ datasetId: initialId = "", onDatasetId })
   const saveConfig = async () => {
     setError(null);
     setStatus("");
-    if (!datasetId) {
-      setError("Please provide a dataset ID before saving configuration.");
+    if (!uploadId) {
+      setError("Please upload a CSV and generate a preview before saving configuration.");
       return;
     }
     const payload = {
-      filterable_columns: filterable.split(",").map((s) => s.trim()).filter(Boolean),
-      retrievable_columns: retrievable.split(",").map((s) => s.trim()).filter(Boolean),
+      upload_id: uploadId,
+      dims: filterable.split(",").map((s) => s.trim()).filter(Boolean),
+      metrics: retrievable.split(",").map((s) => s.trim()).filter(Boolean),
+      display_name: datasetId || undefined,
     };
     try {
-      const res = await fetch(apiUrl(`/api/datasets/${datasetId}/config`), {
+      const res = await fetch(apiUrl(`/api/users/${DEFAULT_USER_ID}/datasets`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const text = await res.text();
-        throw new Error(text || "Failed to save config");
+        throw new Error(text || "Failed to create dataset");
       }
-      onDatasetId?.(datasetId);
-      setStatus("Config saved");
+      const json = await res.json();
+      const createdId = json.dataset_id as string;
+      setDatasetId(createdId);
+      onDatasetId?.(createdId);
+      setStatus(
+        `Dataset created. id=${createdId}, dims=${(json.dims || []).join(
+          ", "
+        )}, metrics=${(json.metrics || []).join(", ")}`
+      );
     } catch (e: any) {
-      setError(e?.message || "Failed to save config");
+      setError(e?.message || "Failed to create dataset");
     }
   };
 
@@ -55,13 +65,13 @@ const ConfigPage: React.FC<Props> = ({ datasetId: initialId = "", onDatasetId })
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-xs text-slate-300">
           <span className="mb-1 block text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">
-            Dataset ID
+            Dataset name (optional)
           </span>
           <input
             value={datasetId}
             onChange={(e) => setDatasetId(e.target.value)}
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-accent focus:outline-none"
-            placeholder="Paste an existing dataset_id"
+            placeholder="e.g. APAC suppliers (will auto-generate an id)"
           />
         </label>
       </div>

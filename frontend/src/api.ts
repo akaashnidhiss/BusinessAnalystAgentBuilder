@@ -1,5 +1,8 @@
 export const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
 
+export const DEFAULT_USER_ID =
+  (import.meta as any).env?.VITE_USER_ID || "demo";
+
 export function apiUrl(path: string): string {
   if (path.startsWith("http")) return path;
   const trimmed = path.startsWith("/") ? path : `/${path}`;
@@ -27,4 +30,3 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
   }
   return res.json();
 }
-

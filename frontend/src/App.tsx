@@ -11,6 +11,7 @@ import AgentDetailPage from "./pages/AgentDetailPage";
 
 const App: React.FC = () => {
   const [datasetId, setDatasetId] = useState("");
+  const [uploadId, setUploadId] = useState<string | null>(null);
 
   return (
     <div className="min-h-screen bg-background text-slate-100">
@@ -45,12 +46,41 @@ const App: React.FC = () => {
         <main className="mb-6 flex-1">
           <Routes>
             <Route path="/" element={<AgentUniversePage />} />
-            <Route path="/agents/new" element={<AgentBuilderPage datasetId={datasetId} onDatasetId={setDatasetId} />} />
+            <Route
+              path="/agents/new"
+              element={
+                <AgentBuilderPage
+                  datasetId={datasetId}
+                  onDatasetId={setDatasetId}
+                  uploadId={uploadId}
+                  onUploadId={setUploadId}
+                />
+              }
+            />
             <Route path="/agents/:datasetId" element={<AgentDetailPage onDatasetId={setDatasetId} />} />
 
             {/* Legacy direct-step flows remain available for now */}
-            <Route path="/upload" element={<UploadPage datasetId={datasetId} onDatasetId={setDatasetId} />} />
-            <Route path="/config" element={<ConfigPage datasetId={datasetId} onDatasetId={setDatasetId} />} />
+            <Route
+              path="/upload"
+              element={
+                <UploadPage
+                  datasetId={datasetId}
+                  uploadId={uploadId}
+                  onUploadId={setUploadId}
+                  onDatasetId={setDatasetId}
+                />
+              }
+            />
+            <Route
+              path="/config"
+              element={
+                <ConfigPage
+                  datasetId={datasetId}
+                  onDatasetId={setDatasetId}
+                  uploadId={uploadId}
+                />
+              }
+            />
             <Route path="/etl" element={<EtlPage datasetId={datasetId} onDatasetId={setDatasetId} />} />
             <Route path="/taxonomy" element={<TaxonomyPage datasetId={datasetId} onDatasetId={setDatasetId} />} />
             <Route path="/query" element={<QueryPlayground datasetId={datasetId} onDatasetId={setDatasetId} />} />

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import QueryPlayground from "./QueryPlayground";
 import TaxonomyPanel from "../components/TaxonomyPanel";
-import { getJson } from "../api";
+import { DEFAULT_USER_ID, getJson } from "../api";
 
 type Props = {
   onDatasetId?: (id: string) => void;
@@ -10,8 +10,8 @@ type Props = {
 
 type TaxonomyResponse = {
   dataset_id: string;
-  yaml: string;
-  counts?: Record<string, number>;
+  taxonomy_yaml: string;
+  stats?: Record<string, number>;
   dims?: string[];
 };
 
@@ -31,11 +31,14 @@ const AgentDetailPage: React.FC<Props> = ({ onDatasetId }) => {
 
   useEffect(() => {
     const loadTaxonomy = async () => {
-      if (!datasetId) return;
       setLoadingTaxonomy(true);
       setTaxonomyError(null);
       try {
-        const data = await getJson<TaxonomyResponse>(`/api/datasets/${datasetId}/taxonomy`);
+        const data = await getJson<TaxonomyResponse>(`/api/users/${DEFAULT_USER_ID}/taxonomy`);
+        if (data.dataset_id) {
+          setDatasetId(data.dataset_id);
+          onDatasetId?.(data.dataset_id);
+        }
         setTaxonomy(data);
       } catch (err: any) {
         setTaxonomyError(err?.message || "Failed to load taxonomy. Ensure ETL has been run.");
@@ -87,10 +90,10 @@ const AgentDetailPage: React.FC<Props> = ({ onDatasetId }) => {
                   The YAML below is the routing map your agent uses to validate and back off filters.
                 </p>
               </div>
-              {taxonomy?.counts && (
+              {taxonomy?.stats && (
                 <div className="rounded-full bg-slate-900 px-3 py-1 text-[11px] text-slate-300">
-                  {taxonomy.counts.leaf_rows != null && (
-                    <>leaf rows: {taxonomy.counts.leaf_rows}</>
+                  {taxonomy.stats.leaf_rows != null && (
+                    <>leaf rows: {taxonomy.stats.leaf_rows}</>
                   )}
                 </div>
               )}
@@ -108,8 +111,8 @@ const AgentDetailPage: React.FC<Props> = ({ onDatasetId }) => {
             )}
             {taxonomy && !taxonomyError && (
               <TaxonomyPanel
-                yaml={taxonomy.yaml}
-                onCopy={() => navigator.clipboard.writeText(taxonomy.yaml)}
+                yaml={taxonomy.taxonomy_yaml}
+                onCopy={() => navigator.clipboard.writeText(taxonomy.taxonomy_yaml)}
               />
             )}
           </section>
@@ -120,4 +123,3 @@ const AgentDetailPage: React.FC<Props> = ({ onDatasetId }) => {
 };
 
 export default AgentDetailPage;
-

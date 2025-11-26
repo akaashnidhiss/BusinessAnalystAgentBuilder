@@ -3,11 +3,11 @@
 Minimal React outline to pair with the FastAPI backend.
 
 ### Pages / Components
-- `UploadPage`: file input -> `POST /api/datasets/upload`; show `dataset_id`.
-- `ConfigPage`: fetch sample columns; let user mark filterable vs retrievable; `POST /api/datasets/{id}/config`.
-- `EtlPage`: trigger ETL + DuckDB init via `/etl` then `/duckdb/init`; show stats.
-- `TaxonomyPreview`: fetch `/taxonomy`; render YAML string in a monospaced panel with copy button.
-- `QueryPlayground`: NL query box (placeholder) + advanced filter chips -> `POST /api/query`; show results table and diag (effective filters, backoff level, returned rows).
+- `UploadPage`: file input -> `POST /api/users/{user_id}/datasets/preview`; show `upload_id` and inferred schema.
+- `ConfigPage`: let user mark filterable dims vs metrics; `POST /api/users/{user_id}/datasets` to create a dataset and run ETL/taxonomy.
+- `EtlPage`: informational; ETL + DuckDB init now happen automatically as part of dataset creation.
+- `TaxonomyPreview`: fetch `/api/users/{user_id}/taxonomy`; render YAML routing map in a monospaced panel with copy button.
+- `QueryPlayground`: NL intent box (placeholder) + advanced filter chips -> `POST /api/users/{user_id}/run/filters`; show results table and diag (requested vs used filters, returned rows). A separate endpoint `/api/users/{user_id}/run/agent` is available for full agent runs.
 
 ### Running locally (mock backend)
 1) In another shell: `python -m uvicorn mock_backend:app --reload` (serves http://localhost:8000).
@@ -15,14 +15,14 @@ Minimal React outline to pair with the FastAPI backend.
 3) Visit the dev server (default http://localhost:5173). API calls are proxied to http://localhost:8000 by default; override with `VITE_API_BASE`.
 
 ### API helpers
-- `POST /api/datasets/upload` (FormData)
-- `POST /api/datasets/{id}/config`
-- `POST /api/datasets/{id}/etl`
-- `GET /api/datasets/{id}/taxonomy`
-- `POST /api/datasets/{id}/duckdb/init`
-- `POST /api/query`
+- `POST /api/users/{user_id}/datasets/preview` (FormData)
+- `POST /api/users/{user_id}/datasets`
+- `GET /api/users/{user_id}/datasets`
+- `GET /api/users/{user_id}/taxonomy`
+- `POST /api/users/{user_id}/run/filters`
+- `POST /api/users/{user_id}/run/agent`
 
 ### UI notes
-- Keep the steps linear (upload -> config -> etl -> taxonomy -> query).
+- Keep the steps linear (upload -> schema -> taxonomy -> query); ETL is implicit in dataset creation.
 - Show the taxonomy YAML prominently so users see the router that constrains the tool.
-- Diagnostics should surface `backoff_level`, `reason`, and `canonical_filters` returned by the backend.
+- Diagnostics should surface the canonical filters and any reasons for backoff or empty results returned by the backend.

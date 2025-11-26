@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import ResultsTable from "../components/ResultsTable";
 import DiagPanel from "../components/DiagPanel";
-import { apiUrl, getJson } from "../api";
+import { DEFAULT_USER_ID, apiUrl, getJson } from "../api";
 
 type Props = {
   datasetId?: string;
@@ -30,23 +30,25 @@ const QueryPlayground: React.FC<Props> = ({ datasetId: initialId = "", onDataset
 
   useEffect(() => {
     const loadDimensions = async () => {
-      if (!datasetId) {
-        setDimensionOrder([]);
-        setDimensionValues({});
-        return;
-      }
       setLoadingDimensions(true);
       setDimensionsError(null);
       try {
         const data = await getJson<{
+          ok: boolean;
           dataset_id: string;
           dims: string[];
-          values: Record<string, string[]>;
-        }>(`/api/datasets/${datasetId}/dimensions`);
+          metrics: string[];
+          taxonomy_yaml: string;
+          per_dim_values: Record<string, string[]>;
+        }>(`/api/users/${DEFAULT_USER_ID}/taxonomy`);
+        if (data.dataset_id) {
+          setDatasetId(data.dataset_id);
+          onDatasetId?.(data.dataset_id);
+        }
         setDimensionOrder(data.dims || []);
-        setDimensionValues(data.values || {});
+        setDimensionValues(data.per_dim_values || {});
       } catch (e: any) {
-        setDimensionsError(e?.message || "Failed to load dimensions. Ensure ETL has been run.");
+        setDimensionsError(e?.message || "Failed to load dimensions. Ensure a dataset has been created.");
         setDimensionOrder([]);
         setDimensionValues({});
       } finally {
@@ -54,7 +56,7 @@ const QueryPlayground: React.FC<Props> = ({ datasetId: initialId = "", onDataset
       }
     };
     loadDimensions();
-  }, [datasetId]);
+  }, [initialId, onDatasetId]);
 
   const appendLog = (line: string) => {
     setAgentLog((prev) => [...prev, line]);
@@ -104,12 +106,7 @@ const QueryPlayground: React.FC<Props> = ({ datasetId: initialId = "", onDataset
   const runQuery = async () => {
     setError(null);
     setStatus("");
-    if (!datasetId) {
-      setError("Please provide a dataset ID before querying.");
-      return;
-    }
     const payload = {
-      dataset_id: datasetId,
       filters: selectedFilters,
       limit,
     };
@@ -117,7 +114,7 @@ const QueryPlayground: React.FC<Props> = ({ datasetId: initialId = "", onDataset
     setStatus("Running query…");
     appendLog(`Executing query with filters: ${JSON.stringify(payload.filters)} and limit=${payload.limit ?? "default"}.`);
     try {
-      const res = await fetch(apiUrl("/api/query"), {
+      const res = await fetch(apiUrl(`/api/users/${DEFAULT_USER_ID}/run/filters`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -129,7 +126,6 @@ const QueryPlayground: React.FC<Props> = ({ datasetId: initialId = "", onDataset
       const json = await res.json();
       setRows(json.rows || []);
       setDiag(json.diag || null);
-      onDatasetId?.(datasetId);
       setStatus(`Returned ${json.row_count ?? (json.rows?.length ?? 0)} rows`);
       appendLog(`Query succeeded with ${json.row_count ?? (json.rows?.length ?? 0)} rows.`);
     } catch (e: any) {
@@ -157,9 +153,9 @@ const QueryPlayground: React.FC<Props> = ({ datasetId: initialId = "", onDataset
           </span>
           <input
             value={datasetId}
-            onChange={(e) => setDatasetId(e.target.value)}
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-accent focus:outline-none"
-            placeholder="dataset_id that backs this agent"
+            readOnly
+            placeholder="Resolved from the current user’s dataset"
           />
         </label>
         <label className="text-xs text-slate-300">
@@ -208,7 +204,7 @@ const QueryPlayground: React.FC<Props> = ({ datasetId: initialId = "", onDataset
         )}
         {!dimensionsError && !loadingDimensions && !dimensionOrder.length && (
           <p className="text-[11px] text-slate-500">
-            No dimensions available yet. Make sure ETL has been run for this dataset.
+            No dimensions available yet. Make sure you have created a dataset for this user.
           </p>
         )}
         {dimensionOrder.length > 0 && (

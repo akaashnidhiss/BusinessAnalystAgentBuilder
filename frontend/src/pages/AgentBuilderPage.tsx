@@ -8,6 +8,8 @@ import QueryPlayground from "./QueryPlayground";
 type Props = {
   datasetId?: string;
   onDatasetId?: (id: string) => void;
+  uploadId?: string | null;
+  onUploadId?: (id: string) => void;
 };
 
 const steps = [
@@ -33,7 +35,7 @@ const steps = [
   },
 ];
 
-const AgentBuilderPage: React.FC<Props> = ({ datasetId, onDatasetId }) => {
+const AgentBuilderPage: React.FC<Props> = ({ datasetId, onDatasetId, uploadId, onUploadId }) => {
   const [currentStep, setCurrentStep] = useState<number>(1);
 
   const activeStep = steps.find((s) => s.id === currentStep) ?? steps[0];
@@ -48,7 +50,7 @@ const AgentBuilderPage: React.FC<Props> = ({ datasetId, onDatasetId }) => {
         <ol className="mt-4 space-y-3 text-sm">
           {steps.map((step) => {
             const isActive = step.id === currentStep;
-            const isCompleted = datasetId && step.id < currentStep;
+            const isCompleted = step.id < currentStep;
             return (
               <li key={step.id}>
                 <button
@@ -105,10 +107,15 @@ const AgentBuilderPage: React.FC<Props> = ({ datasetId, onDatasetId }) => {
 
         <div className="space-y-6">
           {currentStep === 1 && (
-            <UploadPage datasetId={datasetId} onDatasetId={onDatasetId} />
+            <UploadPage
+              datasetId={datasetId}
+              uploadId={uploadId}
+              onUploadId={onUploadId}
+              onDatasetId={onDatasetId}
+            />
           )}
           {currentStep === 2 && (
-            <ConfigPage datasetId={datasetId} onDatasetId={onDatasetId} />
+            <ConfigPage datasetId={datasetId} onDatasetId={onDatasetId} uploadId={uploadId} />
           )}
           {currentStep === 3 && (
             <div className="space-y-6">
@@ -153,4 +160,3 @@ const AgentBuilderPage: React.FC<Props> = ({ datasetId, onDatasetId }) => {
 };
 
 export default AgentBuilderPage;
-

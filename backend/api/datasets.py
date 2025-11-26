@@ -10,9 +10,9 @@ import pandas as pd
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from backend.data_agent.dataset_registry import datasets_root, get_dataset, list_datasets
-from backend.data_agent.duckdb_query import run_query
-from backend.data_agent.orchestrator import create_dataset, run_dataset_agent
+from ..data_agent.dataset_registry import datasets_root, get_dataset, list_datasets
+from ..data_agent.duckdb_query import run_query
+from ..data_agent.orchestrator import create_dataset, run_dataset_agent
 
 
 router = APIRouter()

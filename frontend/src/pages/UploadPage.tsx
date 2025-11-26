@@ -1,13 +1,15 @@
 import React, { useState } from "react";
-import { apiUrl } from "../api";
+import { DEFAULT_USER_ID, apiUrl } from "../api";
 
 type Props = {
   datasetId?: string;
   onDatasetId?: (id: string) => void;
+  uploadId?: string | null;
+  onUploadId?: (id: string) => void;
 };
 
-const UploadPage: React.FC<Props> = ({ datasetId: initialId, onDatasetId }) => {
-  const [datasetId, setDatasetId] = useState<string | null>(initialId || null);
+const UploadPage: React.FC<Props> = ({ datasetId, uploadId: initialUploadId, onUploadId }) => {
+  const [uploadId, setUploadId] = useState<string | null>(initialUploadId || null);
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -19,17 +21,22 @@ const UploadPage: React.FC<Props> = ({ datasetId: initialId, onDatasetId }) => {
     const fd = new FormData();
     fd.append("file", file);
     setIsUploading(true);
-    setStatus("Uploading…");
+    setStatus("Uploading and generating preview…");
     try {
-      const res = await fetch(apiUrl("/api/datasets/upload"), { method: "POST", body: fd });
+      const res = await fetch(
+        apiUrl(`/api/users/${DEFAULT_USER_ID}/datasets/preview`),
+        { method: "POST", body: fd },
+      );
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text || "Upload failed");
       }
       const json = await res.json();
-      setDatasetId(json.dataset_id);
-      onDatasetId?.(json.dataset_id);
-      setStatus(`Uploaded ${file.name}. Dataset ID: ${json.dataset_id}`);
+      setUploadId(json.upload_id);
+      onUploadId?.(json.upload_id);
+      setStatus(
+        `Previewed ${file.name}. Use the next step to choose schema and create the dataset.`
+      );
     } catch (e: any) {
       setError(e?.message || "Upload failed");
       setStatus("");
@@ -66,11 +73,11 @@ const UploadPage: React.FC<Props> = ({ datasetId: initialId, onDatasetId }) => {
           {error}
         </div>
       )}
-      {datasetId && (
+      {uploadId && (
         <div className="flex items-center gap-2 text-[11px] text-slate-300">
-          <span className="text-slate-400">dataset_id</span>
+          <span className="text-slate-400">upload_id</span>
           <code className="rounded bg-slate-900 px-2 py-0.5 font-mono text-[11px] text-slate-100">
-            {datasetId}
+            {uploadId}
           </code>
         </div>
       )}
