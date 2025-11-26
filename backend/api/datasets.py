@@ -1,204 +1,270 @@
-"""Dataset lifecycle endpoints: upload -> configure -> ETL -> taxonomy -> DuckDB init."""
-
 from __future__ import annotations
 
-from typing import Dict, List
+import json
+import time
 import uuid
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel
 
-from ..schemas import (
-    ColumnListResponse,
-    DatasetConfig,
-    DatasetSummary,
-    EtlRequest,
-    TaxonomyResponse,
-    UploadResponse,
-)
-from ..services import duckdb_store, etl, taxonomy, validation
-from ..storage import get_dataset, list_datasets, register_dataset, update_dataset
+from backend.data_agent.dataset_registry import datasets_root, get_dataset, list_datasets
+from backend.data_agent.duckdb_query import run_query
+from backend.data_agent.orchestrator import create_dataset, run_dataset_agent
+
 
 router = APIRouter()
 
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True)
+
+class PreviewResponse(BaseModel):
+    upload_id: str
+    columns: List[str]
+    inferred_types: Dict[str, str]
 
 
-@router.post("/upload", response_model=UploadResponse)
-async def upload_dataset(file: UploadFile = File(...)):
-    dataset_id = str(uuid.uuid4())
-    raw_path = DATA_DIR / f"{dataset_id}_raw.csv"
+class DatasetCreateRequest(BaseModel):
+    upload_id: str
+    dims: List[str]
+    metrics: List[str] = []
+    display_name: Optional[str] = None
 
-    content = await file.read()
-    raw_path.write_bytes(content)
 
-    register_dataset(dataset_id, str(raw_path), original_filename=file.filename)
+class DatasetCreateResponse(BaseModel):
+    dataset_id: str
+    display_name: str
+    dims: List[str]
+    metrics: List[str]
+    stats: Dict[str, Any]
+
+
+class FiltersRunRequest(BaseModel):
+    filters: Dict[str, List[str]]
+    limit: Optional[int] = None
+
+
+class AgentRunRequest(BaseModel):
+    natural_query: str
+    email: Optional[str] = None
+    client_id: Optional[str] = None
+    session_id: Optional[str] = None
+
+
+class DatasetSummary(BaseModel):
+    dataset_id: str
+    display_name: str
+    dims: List[str]
+    metrics: List[str]
+    stats: Dict[str, Any]
+    taxonomy_yaml: str
+    is_current: bool
+
+
+def _uploads_dir() -> Path:
+    root = datasets_root().parent
+    d = root / "uploads"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _user_map_path() -> Path:
+    root = datasets_root().parent
+    return root / "user_datasets.json"
+
+
+def _load_user_map() -> Dict[str, str]:
+    path = _user_map_path()
+    if not path.exists():
+        return {}
     try:
-        preview_df = pd.read_csv(raw_path, nrows=5)
-        rows_previewed = len(preview_df)
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        rows_previewed = 0
-
-    return UploadResponse(dataset_id=dataset_id, filename=file.filename, rows_previewed=rows_previewed)
+        return {}
 
 
-@router.post("/{dataset_id}/config", response_model=DatasetConfig)
-async def set_config(dataset_id: str, config: DatasetConfig):
+def _save_user_map(mapping: Dict[str, str]) -> None:
+    path = _user_map_path()
+    path.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _set_user_dataset(user_id: str, dataset_id: str) -> None:
+    mapping = _load_user_map()
+    mapping[user_id] = dataset_id
+    _save_user_map(mapping)
+
+
+def _get_user_dataset(user_id: str) -> str:
+    mapping = _load_user_map()
+    if user_id not in mapping:
+        raise HTTPException(status_code=404, detail="No dataset configured for this user")
+    return mapping[user_id]
+
+
+@router.post("/users/{user_id}/datasets/preview", response_model=PreviewResponse)
+async def preview_dataset(user_id: str, file: UploadFile = File(...)) -> PreviewResponse:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="File name is required")
+    upload_id = uuid.uuid4().hex
+    dest = _uploads_dir() / f"{upload_id}.csv"
+    content = await file.read()
+    dest.write_bytes(content)
+
     try:
-        rec = get_dataset(dataset_id)
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        df = pd.read_csv(dest, nrows=100)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read CSV: {e}")
 
-    update_dataset(dataset_id, config=config)
-    return config
+    cols = list(df.columns)
+    inferred: Dict[str, str] = {}
+    for c in cols:
+        dt = df[c].dtype
+        if pd.api.types.is_numeric_dtype(dt):
+            inferred[c] = "number"
+        elif pd.api.types.is_datetime64_any_dtype(dt):
+            inferred[c] = "datetime"
+        else:
+            inferred[c] = "string"
+
+    return PreviewResponse(upload_id=upload_id, columns=cols, inferred_types=inferred)
 
 
-@router.get("/", response_model=list[DatasetSummary])
-async def list_all_datasets():
-    summaries: list[DatasetSummary] = []
-    for rec in list_datasets():
+@router.post("/users/{user_id}/datasets", response_model=DatasetCreateResponse)
+async def create_user_dataset(user_id: str, body: DatasetCreateRequest) -> DatasetCreateResponse:
+    upload_path = _uploads_dir() / f"{body.upload_id}.csv"
+    if not upload_path.exists():
+        raise HTTPException(status_code=404, detail="Upload not found; preview may have expired")
+
+    dataset_id = f"{user_id}_{int(time.time())}"
+    meta = create_dataset(
+        dataset_id=dataset_id,
+        raw_file_path=str(upload_path),
+        dims=body.dims,
+        metrics=body.metrics,
+        display_name=body.display_name or dataset_id,
+    )
+    _set_user_dataset(user_id, dataset_id)
+
+    return DatasetCreateResponse(
+        dataset_id=meta.dataset_id,
+        display_name=meta.display_name or meta.dataset_id,
+        dims=meta.dims,
+        metrics=meta.metrics,
+        stats=meta.stats,
+    )
+
+
+@router.get("/users/{user_id}/datasets", response_model=List[DatasetSummary])
+async def list_user_datasets(user_id: str) -> List[DatasetSummary]:
+    mapping = _load_user_map()
+    current_id = mapping.get(user_id)
+    summaries: List[DatasetSummary] = []
+    prefix = f"{user_id}_"
+    for meta in list_datasets():
+        if not meta.dataset_id.startswith(prefix):
+            continue
+        yaml_str = ""
+        if meta.taxonomy_yaml_path:
+            p = Path(meta.taxonomy_yaml_path)
+            if p.exists():
+                yaml_str = p.read_text(encoding="utf-8")
         summaries.append(
             DatasetSummary(
-                dataset_id=rec.dataset_id,
-                filename=rec.original_filename,
-                has_config=rec.config is not None,
-                has_taxonomy=bool(rec.taxonomy_yaml),
+                dataset_id=meta.dataset_id,
+                display_name=meta.display_name or meta.dataset_id,
+                dims=meta.dims,
+                metrics=meta.metrics,
+                stats=meta.stats,
+                taxonomy_yaml=yaml_str,
+                is_current=(meta.dataset_id == current_id),
             )
         )
     return summaries
 
 
-@router.get("/{dataset_id}/columns", response_model=ColumnListResponse)
-async def get_columns(dataset_id: str, preview_rows: int = 5):
-    try:
-        rec = get_dataset(dataset_id)
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+@router.get("/users/{user_id}/taxonomy")
+async def get_user_taxonomy(user_id: str) -> Dict[str, Any]:
+    dataset_id = _get_user_dataset(user_id)
+    meta = get_dataset(dataset_id)
 
-    try:
-        df = pd.read_csv(rec.raw_path, nrows=max(preview_rows, 1))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to read dataset: {e}")
+    yaml_str = ""
+    if meta.taxonomy_yaml_path:
+        p = Path(meta.taxonomy_yaml_path)
+        if p.exists():
+            yaml_str = p.read_text(encoding="utf-8")
 
-    columns_raw = list(df.columns)
-    columns_normalized = [etl._normalize_column(c) for c in columns_raw]  # type: ignore
-    sample = df.to_dict(orient="records")
-    return ColumnListResponse(
-        dataset_id=dataset_id,
-        columns_raw=columns_raw,
-        columns_normalized=columns_normalized,
-        sample_preview=sample,
-    )
+    per_dim: Dict[str, List[str]] = {}
+    if meta.valid_sets_path:
+        vp = Path(meta.valid_sets_path)
+        if vp.exists():
+            try:
+                vs = json.loads(vp.read_text(encoding="utf-8"))
+                per_dim = vs.get("per_dim", {}) or {}
+            except Exception:
+                per_dim = {}
 
-
-@router.get("/{dataset_id}/config", response_model=DatasetConfig)
-async def get_config(dataset_id: str):
-    try:
-        rec = get_dataset(dataset_id)
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    if rec.config is None:
-        raise HTTPException(status_code=404, detail="Config not set")
-    return rec.config
-
-
-@router.post("/{dataset_id}/etl")
-async def trigger_etl(payload: EtlRequest):
-    try:
-        rec = get_dataset(payload.dataset_id)
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    if rec.config is None:
-        raise HTTPException(status_code=400, detail="Dataset config not set. Call /config first.")
-
-    normalized_path, leaf_index_path, stats = etl.run_etl(payload.dataset_id, rec.raw_path, rec.config)
-    dims = [etl._normalize_column(c) for c in rec.config.filterable_columns]  # type: ignore
-    yaml_text = taxonomy.build_taxonomy_yaml(leaf_index_path, dims)
-    valid_sets = validation.derive_valid_sets(leaf_index_path, dims)
-
-    update_dataset(
-        payload.dataset_id,
-        normalized_path=normalized_path,
-        leaf_index_path=leaf_index_path,
-        taxonomy_yaml=yaml_text,
-        dims=dims,
-        valid_sets=valid_sets,
-    )
     return {
-        "dataset_id": payload.dataset_id,
-        "normalized_path": normalized_path,
-        "leaf_index_path": leaf_index_path,
-        "stats": stats,
+        "ok": True,
+        "dataset_id": meta.dataset_id,
+        "display_name": meta.display_name or meta.dataset_id,
+        "dims": meta.dims,
+        "metrics": meta.metrics,
+        "stats": meta.stats,
+        "taxonomy_yaml": yaml_str,
+        "per_dim_values": per_dim,
     }
 
 
-@router.get("/{dataset_id}/taxonomy", response_model=TaxonomyResponse)
-async def get_taxonomy(dataset_id: str):
-    try:
-        rec = get_dataset(dataset_id)
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+@router.post("/users/{user_id}/run/filters")
+async def run_user_filters(user_id: str, body: FiltersRunRequest) -> Dict[str, Any]:
+    dataset_id = _get_user_dataset(user_id)
+    meta = get_dataset(dataset_id)
 
-    if not rec.taxonomy_yaml:
-        raise HTTPException(status_code=400, detail="Taxonomy not built. Run /etl first.")
+    filt_norm: Dict[str, List[str]] = {}
+    for dim, vals in (body.filters or {}).items():
+        if dim not in meta.dims:
+            continue
+        cleaned: List[str] = []
+        for v in vals:
+            if v is None:
+                continue
+            s = str(v).strip()
+            if s:
+                cleaned.append(s)
+        if cleaned:
+            filt_norm[dim] = cleaned
 
-    return TaxonomyResponse(
-        dataset_id=dataset_id,
-        yaml=rec.taxonomy_yaml,
-        counts={"leaf_rows": rec.valid_sets.get("stats", {}).get("leaf_rows", 0) if rec.valid_sets else 0},  # type: ignore
-        dims=rec.dims,
-    )
+    diag: Dict[str, Any] = {"requested": body.filters, "used": filt_norm}
+    if not filt_norm:
+        return {
+            "ok": False,
+            "filters": body.filters,
+            "canonical_filters": {},
+            "rows": [],
+            "row_count": 0,
+            "diag": {**diag, "reason": "no_valid_filters"},
+        }
 
-
-@router.get("/{dataset_id}/dimensions")
-async def get_dimensions(dataset_id: str):
-    """
-    Expose the validated filter dimensions and their allowed values for a dataset.
-
-    This is derived from the validation sets built during ETL and powers the
-    dropdowns / chips in the agent query UI.
-    """
-    try:
-        rec = get_dataset(dataset_id)
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-    if not rec.valid_sets:
-        raise HTTPException(status_code=400, detail="Validation sets not available. Run /etl first.")
-
-    per_dim = rec.valid_sets.get("per_dim", {})  # type: ignore[assignment]
-    if not isinstance(per_dim, dict):
-        raise HTTPException(status_code=500, detail="Invalid validation metadata for dataset.")
-
-    dims: List[str] = rec.dims or list(per_dim.keys())
-    values: Dict[str, List[str]] = {}
-    for dim in dims:
-        dim_values = per_dim.get(dim, set())
-        try:
-            # per_dim is built from sets; convert to a sorted list for JSON.
-            values[dim] = sorted(list(dim_values))
-        except TypeError:
-            values[dim] = [str(v) for v in dim_values]
-
+    rows, row_count = run_query(dataset_id, filt_norm, limit=body.limit, meta=meta)
     return {
-        "dataset_id": dataset_id,
-        "dims": dims,
-        "values": values,
+        "ok": True,
+        "filters": body.filters,
+        "canonical_filters": filt_norm,
+        "rows": rows,
+        "row_count": row_count,
+        "diag": diag,
     }
 
 
-@router.post("/{dataset_id}/duckdb/init")
-async def init_duckdb(dataset_id: str):
-    try:
-        rec = get_dataset(dataset_id)
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+@router.post("/users/{user_id}/run/agent")
+async def run_user_agent(user_id: str, body: AgentRunRequest) -> Dict[str, Any]:
+    dataset_id = _get_user_dataset(user_id)
+    result = run_dataset_agent(
+        dataset_id=dataset_id,
+        natural_query=body.natural_query,
+        email=body.email,
+        client_id=body.client_id,
+        session_id=body.session_id,
+    )
+    return result
 
-    if not rec.normalized_path or not rec.dims:
-        raise HTTPException(status_code=400, detail="Normalized data missing. Run /etl first.")
-
-    handle = duckdb_store.register_duckdb(dataset_id, rec.normalized_path, rec.dims)
-    update_dataset(dataset_id, duckdb_path=rec.normalized_path, table_name=handle.table_name)
-    return {"ok": True, "table_name": handle.table_name}
